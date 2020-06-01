@@ -4,6 +4,7 @@ import time
 import pyautogui
 
 
+# parse a float from the inputted string, using regex
 def float_parse(string):
     re_expression = '-?\\d+\\.\\d'
     if string:
@@ -12,10 +13,12 @@ def float_parse(string):
         time.sleep(1)
 
 
+# find the sign of a number. returns 0 if it is positive, and 1 otherwise
 def sign(x):
     return int(x and (1, 0)[x < 0])
 
 
+# create a basic action class. Not really necessary, but makes sure everything is nice and uniform
 class action:
     def get_errors(self):
         pass
@@ -39,9 +42,12 @@ class action:
         pass
 
 
+# the basic align action. aligns the spacecraft rotationally
+# the description of the arguments can be found in the README file (not done just yet)
 class align(action):
     def __init__(self, driver, target_accuracy=0.2, target_speed_precise=0.1, target_speed_coarse=0.5,
                  target_speed_transition=4, refine=True):
+        # get all the html elements required to align the spacecraft
         self.div_pitch = driver.find_element_by_xpath('//*[@id="pitch"]/div[1]')
         self.div_pitch_rate = driver.find_element_by_xpath('//*[@id="pitch"]/div[2]')
 
@@ -58,6 +64,7 @@ class align(action):
         self.target_speed_transition = target_speed_transition
         self.refine = refine
 
+    # get rotational errors
     def get_errors(self):
         errors = []
         txt = float_parse(self.div_pitch.text)
@@ -70,6 +77,7 @@ class align(action):
         errors.append(float(txt))
         return errors
 
+    # get the current rotational rates
     def get_rates(self):
         rates = []
         txt = float_parse(self.div_pitch_rate.text)
@@ -82,40 +90,60 @@ class align(action):
         rates.append(float(txt))
         return rates
 
+    # get the rotational rate targets i.e. how fast the spacecraft *should* be rotating
     def get_targets(self, errors):
         targets = []
+
+        # iterate through each error
         for error in errors:
+            # get the absolute value of the error, without sign
             absoluteError = abs(error)
+
+            # check if the error is above acceptable errors (defined by target accuracy)
             if absoluteError > self.target_accuracy:
+                # check if it should be in "coarse" or "precision" mode, depending on the magnitude of the error
                 if absoluteError > self.target_speed_transition:
-                    targets.append(self.target_speed_coarse * (error / absoluteError))
+                    targets.append(self.target_speed_coarse * (error / absoluteError))  # coarse mode
                 else:
-                    targets.append(self.target_speed_precise * (error / absoluteError))
+                    targets.append(self.target_speed_precise * (error / absoluteError))  # precision mode
             else:
-                targets.append(0)
+                targets.append(0)  # this axis is acceptably aligned
 
         return targets
 
+    # set the rotational targets
     def set_targets(self, targets, rates):
+        # iterate through each rate target
         for i in range(len(targets)):
+            # calculate the difference between the required rate and the current rate
             delta = int((targets[i] - rates[i]) * 10)
+
+            # from this, get the key we need to press
             key = self.keys[i][sign(delta)]
+
+            # if the delta is not 0, then apply the required moment
             if delta:
                 pyautogui.press(key, presses=abs(delta))
 
+    # refine the spacecraft's orientation (not really needed, but included for the sake of accuracy)
     def refine_spacecraft_orientation(self, errors):
+        # iterate through errors and check which ones are acceptable
         for i in range(len(errors)):
             error = errors[i]
             key = sign(error)
             absoluteError = abs(error)
+
+            # those that are not acceptable are corrected
             if absoluteError > self.target_accuracy:
                 pyautogui.press(self.keys[i][key], presses=1)
                 time.sleep(int(absoluteError * 5))
                 pyautogui.press(self.keys[i][1 - key], presses=1)
 
+    # stop all rotational movement. Run at the end of the alignment phase to prevent spacecraft from veering off course
     def zero_rates(self, rates):
         self.set_targets([0.0, 0.0, 0.0], rates)
 
+    # the condition to check if the loop should continue
     def loop_condition(self, errors):
         for error in errors:
             absoluteError = abs(error)
@@ -124,16 +152,23 @@ class align(action):
 
         return True
 
+    # run the action
     def run(self):
+        # get the rates and errors
         rates = self.get_rates()
         errors = self.get_errors()
+
+        # continue the loop as long as the loop condition is met
         while not self.loop_condition(errors):
-            targets = self.get_targets(errors)
-            self.set_targets(targets, rates)
-            errors = self.get_errors()
+            targets = self.get_targets(errors)  # get the rotational targets
+            self.set_targets(targets, rates)  # set the rotational targets
+            errors = self.get_errors()  # get the errors and rotational rates for the next iteration
             rates = self.get_rates()
 
+        # zero out the rotation
         self.zero_rates(rates)
+
+        # refine the rotation if told to
         if self.refine:
             errors = self.get_errors()
             self.refine_spacecraft_orientation(errors)
@@ -141,12 +176,15 @@ class align(action):
             self.zero_rates(rates)
 
 
+# switch the controls accuracy. this is configured for a 1080p monitor. You'll have to change it for smaller
+# or bigger monitors
 class switch_accuracy(action):
     def run(self):
         pyautogui.moveTo(175, 900)
         pyautogui.click()
 
 
+# the basic translate action. it will move the spacecraft to a defined range from the ISS at a defined speed
 class translate(action):
     def __init__(self, driver, target_rate, upto_range, target_accuracy=0.2, target_speed_precise=2,
                  target_speed_coarse=8,
@@ -168,6 +206,7 @@ class translate(action):
         self.vel = [0, 0, 0]
         self.refine = refine
 
+    # get the displacement from the ISS docking port
     def get_errors(self):
         errors = []
         txt = float_parse(self.div_range_x.text)
@@ -183,9 +222,12 @@ class translate(action):
             errors.append(float(txt))
         return errors
 
+    # get the velocity in arbitrary values
     def get_rates(self):
         return self.vel
 
+    # get the velocity targets. The X target is set based on required speed, and the others by the guidance
+    # variables
     def get_targets(self, errors):
         targets = [self.target_rate]
         for i in range(1, 3):
@@ -201,15 +243,18 @@ class translate(action):
 
         return targets
 
+    # set the velocity targets. Similar to the angular target setting function. Refer to line 129 for explanation
     def set_targets(self, targets, rates):
         for i in range(len(targets)):
             delta = int(targets[i] - rates[i])
             key = sign(delta)
             pyautogui.press(self.keys[i][key], presses=abs(delta))
 
+    # zero the movement
     def zero_rates(self, rates):
         self.set_targets([0.0, 0.0, 0.0], rates)
 
+    # checks if the range is above the range that this action will be active upto
     def loop_condition(self):
         iss_range = float_parse(self.div_range.text)
         if iss_range is not None:
@@ -217,6 +262,7 @@ class translate(action):
         else:
             return False
 
+    # run the translate action
     def run(self):
         rates = self.get_rates()
         errors = self.get_errors()
